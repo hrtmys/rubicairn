@@ -826,10 +826,12 @@ class RubicairnApp < Sinatra::Base
   end
 
   post "/admin/likes" do
+    return_tab = params["return_tab"] == "rss" ? "rss" : nil
+    base_redirect = return_tab ? "/admin?tab=rss" : "/admin"
     url = params["url"].to_s.strip
     if url.empty?
       session[:flash_error] = "対象URLを入力してください。"
-      redirect "/admin"
+      redirect base_redirect
     end
 
     resolved = Rubicairn::ActivityPub.resolve_object(url, config: config)
@@ -841,10 +843,10 @@ class RubicairnApp < Sinatra::Base
       target_inbox_uri: resolved[:inbox_uri],
       activity_id: activity_id
     )
-    redirect "/admin?msg=liked"
+    redirect return_tab ? "/admin?tab=rss&msg=liked" : "/admin?msg=liked"
   rescue StandardError => e
     session[:flash_error] = e.message
-    redirect "/admin"
+    redirect base_redirect
   end
 
   post "/admin/likes/:id/undo" do
@@ -869,10 +871,12 @@ class RubicairnApp < Sinatra::Base
   end
 
   post "/admin/boosts" do
+    return_tab = params["return_tab"] == "rss" ? "rss" : nil
+    base_redirect = return_tab ? "/admin?tab=rss" : "/admin"
     url = params["url"].to_s.strip
     if url.empty?
       session[:flash_error] = "対象URLを入力してください。"
-      redirect "/admin"
+      redirect base_redirect
     end
 
     resolved = Rubicairn::ActivityPub.resolve_object(url, config: config)
@@ -891,10 +895,10 @@ class RubicairnApp < Sinatra::Base
       target_inbox_uri: resolved[:inbox_uri],
       activity_id: activity_id
     )
-    redirect "/admin?msg=boosted"
+    redirect return_tab ? "/admin?tab=rss&msg=boosted" : "/admin?msg=boosted"
   rescue StandardError => e
     session[:flash_error] = e.message
-    redirect "/admin"
+    redirect base_redirect
   end
 
   post "/admin/boosts/:id/undo" do
