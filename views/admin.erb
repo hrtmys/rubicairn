@@ -146,7 +146,7 @@
 
       <% @boosts.each do |boost| %>
         <div class="item item-head">
-          <span class="small">ブースト: <%= h(boost["target_object_uri"]) %></span>
+          <span class="small">ブースト: <%= safe_at_html(boost["target_url"].to_s.empty? ? boost["target_object_uri"] : boost["target_url"]) %></span>
           <form class="inline" method="post" action="/admin/boosts/<%= boost["id"] %>/undo">
             <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
             <button class="outline" type="submit">取消</button>

@@ -671,4 +671,123 @@ class TestApp < Minitest::Test
   ensure
     Rubicairn::SafeHTTP.singleton_class.define_method(:request, orig_request)
   end
+
+  def test_boost_displays_sanitized_on_public_page_and_outbox_and_disappears_on_undo
+    orig_signed_get = Rubicairn::HttpSig.method(:signed_get)
+    Rubicairn::HttpSig.singleton_class.define_method(:signed_get) do |url:, **_kwargs|
+      case url
+      when "https://social.example/@info/post-xss"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate(
+            "id" => "https://social.example/notes/post-xss",
+            "type" => "Note",
+            "url" => "https://social.example/@info/post-xss",
+            "attributedTo" => "https://social.example/users/info",
+            "content" => '<script>alert(1)</script><p>Hello <b>Boost</b> https://social.example/ok</p>'
+          )
+        }
+      when "https://social.example/users/info"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate(
+            "id" => "https://social.example/users/info",
+            "type" => "Organization",
+            "name" => "NaCl Info",
+            "preferredUsername" => "info",
+            "inbox" => "https://social.example/users/info/inbox"
+          )
+        }
+      else
+        { status: 404, headers: {}, body: "" }
+      end
+    end
+
+    cookie, token = fetch_admin_session_and_csrf
+    res_boost = @req.post(
+      "/admin/boosts",
+      admin_headers(cookie).merge(
+        params: { "url" => "https://social.example/@info/post-xss", "authenticity_token" => token }
+      )
+    )
+    assert_includes [302, 303], res_boost.status
+    assert_includes res_boost.headers["location"], "msg=boosted"
+
+    # Duplicate boost is rejected cleanly
+    res_dup = @req.post(
+      "/admin/boosts",
+      admin_headers(cookie).merge(
+        params: { "url" => "https://social.example/@info/post-xss", "authenticity_token" => token }
+      )
+    )
+    assert_includes [302, 303], res_dup.status
+    assert_equal 1, @db.list_boosts.size
+
+    # Public page shows sanitized boost under strict CSP
+    res_pub = @req.get("/users/alice", "HTTP_ACCEPT" => "text/html")
+    assert_equal 200, res_pub.status
+    assert_includes res_pub.headers["content-security-policy"], "default-src 'none'"
+    assert_includes res_pub.body, "↻ ブースト"
+    assert_includes res_pub.body, "NaCl Info"
+    assert_includes res_pub.body, "<!--email_off--><span>@</span>info<span>@</span>social.example<!--/email_off-->"
+    assert_includes res_pub.body, "Hello Boost"
+    assert_includes res_pub.body, 'rel="nofollow noopener noreferrer"'
+    refute_includes res_pub.body, "<script>"
+
+    # Outbox includes Announce activity
+    res_outbox = @req.get("/users/alice/outbox")
+    assert_equal 200, res_outbox.status
+    outbox = JSON.parse(res_outbox.body)
+    announce = outbox["orderedItems"].find { |i| i["type"] == "Announce" }
+    refute_nil announce
+    assert_equal "https://social.example/notes/post-xss", announce["object"]
+
+    # Undo removes boost from public page and outbox
+    boost_id = @db.list_boosts.first["id"]
+    res_undo = @req.post(
+      "/admin/boosts/#{boost_id}/undo",
+      admin_headers(cookie).merge(params: { "authenticity_token" => token })
+    )
+    assert_includes [302, 303], res_undo.status
+
+    res_pub_after = @req.get("/users/alice", "HTTP_ACCEPT" => "text/html")
+    refute_includes res_pub_after.body, "Hello Boost"
+    res_outbox_after = @req.get("/users/alice/outbox")
+    assert_equal 0, JSON.parse(res_outbox_after.body)["totalItems"]
+  ensure
+    Rubicairn::HttpSig.singleton_class.define_method(:signed_get, orig_signed_get)
+  end
+
+  def test_db_migrates_legacy_boosts_table
+    legacy_path = File.join(@tmpdir, "legacy.db")
+    raw = SQLite3::Database.new(legacy_path)
+    raw.execute(<<~SQL)
+      CREATE TABLE boosts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        target_object_uri TEXT UNIQUE NOT NULL,
+        target_actor_uri TEXT NOT NULL,
+        target_inbox_uri TEXT NOT NULL,
+        activity_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    SQL
+    raw.close
+
+    migrated = Rubicairn::DB.new(legacy_path)
+    id = migrated.create_boost(
+      target_object_uri: "https://social.example/notes/1",
+      target_actor_uri: "https://social.example/users/info",
+      target_inbox_uri: "https://social.example/users/info/inbox",
+      activity_id: "https://example.com/users/alice#announce-1",
+      target_url: "https://social.example/@info/1",
+      target_author_name: "Info",
+      target_author_handle: "@info@social.example",
+      target_content_text: "Migrated text"
+    )
+    row = migrated.find_boost(id)
+    assert_equal "Migrated text", row["target_content_text"]
+    migrated.close
+  end
 end

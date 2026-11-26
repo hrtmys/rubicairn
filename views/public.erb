@@ -37,6 +37,8 @@
     .badge { display: inline-block; padding: 1px 6px; border: 1px solid var(--border); font-size: 0.78rem; color: var(--muted); border-radius: 2px; }
     .note { padding: 20px 0; border-bottom: 1px solid var(--border); }
     .note-body p { margin: 0 0 8px; }
+    .boost-label { font-size: 0.84rem; color: var(--muted); margin-bottom: 8px; }
+    .boost-quote { border-left: 2px solid var(--border); padding-left: 14px; margin: 6px 0 10px; }
     .note-meta { font-size: 0.85rem; color: var(--muted); display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; font-variant-numeric: tabular-nums; }
     details.like-box { text-align: right; }
     summary.like-summary { list-style: none; cursor: pointer; display: inline-block; padding: 2px 8px; border: 1px solid var(--border); border-radius: 2px; color: var(--muted); user-select: none; }
@@ -107,26 +109,45 @@
       </section>
 
       <section>
-        <% if @notes.empty? %>
+        <% if @timeline.empty? %>
           <p class="empty">まだ投稿はありません。</p>
         <% else %>
-          <% @notes.each do |note| %>
-            <article class="note">
-              <div class="note-body"><%= Rubicairn::ActivityPub.format_content_html(note["content_raw"]) %></div>
-              <div class="note-meta">
-                <a href="/users/<%= h(config.username) %>/notes/<%= note["id"] %>"><time datetime="<%= h(note["created_at"]) %>"><%= h(format_local_time(note["created_at"])) %></time></a>
-                <details class="like-box">
-                  <summary class="like-summary" title="いいね・ブーストの方法を見る">&#9829; <%= note["like_count"].to_i %></summary>
-                  <div class="like-panel">
-                    <div><strong>リモートからいいね・ブースト</strong></div>
-                    <div>以下の投稿 URL をコピーして、お使いの SNS の検索欄に貼り付けてください。</div>
-                    <input type="text" readonly value="<%= h(config.note_uri(note["id"])) %>">
-                    <div style="color: var(--muted);">• <strong>Mastodon / Misskey / Pleroma / Threads 等</strong>: 検索結果からそのままいいね・ブーストできます。</div>
-                    <div style="color: var(--muted); margin-top: 4px;">• <strong>Bluesky</strong>: AT Protocol のため直接いいねできません（Bridgy Fed 等のブリッジ連携時を除く）。</div>
-                  </div>
-                </details>
-              </div>
-            </article>
+          <% @timeline.each do |entry| %>
+            <% if entry["kind"] == "boost" %>
+              <article class="note">
+                <div class="boost-label">
+                  ↻ ブースト ·
+                  <strong><%= h(entry["target_author_name"].to_s.empty? ? entry["target_actor_uri"] : entry["target_author_name"]) %></strong><% unless entry["target_author_handle"].to_s.empty? %> (<%= safe_at_html(entry["target_author_handle"]) %>)<% end %>
+                </div>
+                <% unless entry["target_content_text"].to_s.empty? %>
+                  <div class="note-body boost-quote"><%= Rubicairn::ActivityPub.format_content_html(entry["target_content_text"]) %></div>
+                <% end %>
+                <div class="note-meta">
+                  <time datetime="<%= h(entry["created_at"]) %>"><%= h(format_local_time(entry["created_at"])) %></time>
+                  <% link_url = entry["target_url"].to_s.empty? ? entry["target_object_uri"] : entry["target_url"] %>
+                  <% if safe_url?(link_url) %>
+                    <a href="<%= h(link_url) %>" rel="nofollow noopener noreferrer" target="_blank">元の投稿を見る ↗</a>
+                  <% end %>
+                </div>
+              </article>
+            <% else %>
+              <article class="note">
+                <div class="note-body"><%= Rubicairn::ActivityPub.format_content_html(entry["content_raw"]) %></div>
+                <div class="note-meta">
+                  <a href="/users/<%= h(config.username) %>/notes/<%= entry["id"] %>"><time datetime="<%= h(entry["created_at"]) %>"><%= h(format_local_time(entry["created_at"])) %></time></a>
+                  <details class="like-box">
+                    <summary class="like-summary" title="いいね・ブーストの方法を見る">&#9829; <%= entry["like_count"].to_i %></summary>
+                    <div class="like-panel">
+                      <div><strong>リモートからいいね・ブースト</strong></div>
+                      <div>以下の投稿 URL をコピーして、お使いの SNS の検索欄に貼り付けてください。</div>
+                      <input type="text" readonly value="<%= h(config.note_uri(entry["id"])) %>">
+                      <div style="color: var(--muted);">• <strong>Mastodon / Misskey / Pleroma / Threads 等</strong>: 検索結果からそのままいいね・ブーストできます。</div>
+                      <div style="color: var(--muted); margin-top: 4px;">• <strong>Bluesky</strong>: AT Protocol のため直接いいねできません（Bridgy Fed 等のブリッジ連携時を除く）。</div>
+                    </div>
+                  </details>
+                </div>
+              </article>
+            <% end %>
           <% end %>
         <% end %>
       </section>

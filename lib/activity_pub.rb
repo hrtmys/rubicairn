@@ -29,6 +29,14 @@ module Rubicairn
       "#{config.actor_uri}##{prefix}-#{SecureRandom.uuid}"
     end
 
+    def strip_html_to_plain_text(html, max_length: 2000)
+      str = html.to_s.encode("UTF-8", invalid: :replace, undef: :replace, replace: "")
+      str = str.gsub(%r{</p>|<br\s*/?>}i, "\n")
+      str = str.gsub(/<[^>]*>/, "")
+      str = CGI.unescapeHTML(str)
+      str.gsub(/\n{3,}/, "\n\n").strip[0, max_length]
+    end
+
     def format_content_html(raw)
       escaped = CGI.escapeHTML(raw.to_s)
       linked = escaped.gsub(%r{https://[^\s<>"']+}i) do |url|
@@ -122,8 +130,8 @@ module Rubicairn
       }
     end
 
-    def outbox_json(config, notes)
-      items = notes.map do |note|
+    def outbox_json(config, notes, boosts: [])
+      note_items = notes.map do |note|
         uri = config.note_uri(note["id"])
         {
           "id" => "#{uri}#create",
@@ -134,6 +142,20 @@ module Rubicairn
           "object" => note_json(config, note, include_context: false)
         }
       end
+
+      boost_items = boosts.map do |boost|
+        {
+          "id" => boost["activity_id"],
+          "type" => "Announce",
+          "actor" => config.actor_uri,
+          "published" => boost["created_at"],
+          "to" => [PUBLIC_COLLECTION],
+          "cc" => [boost["target_actor_uri"]],
+          "object" => boost["target_object_uri"]
+        }
+      end
+
+      items = (note_items + boost_items).sort_by { |i| i["published"].to_s }.reverse.first(50)
 
       {
         "@context" => AS_CONTEXT,
@@ -397,17 +419,25 @@ module Rubicairn
         raise ResolutionError, "Object missing id or attributedTo"
       end
 
-      inbox_uri = fetch_actor_inbox(attributed_to, config: config)
+      actor_info = fetch_actor_info(attributed_to, config: config)
+      raw_url = (doc["url"].is_a?(String) ? doc["url"] : nil) || object_id.to_s
+      target_url = raw_url.strip.start_with?("https://", "http://") ? raw_url.strip[0, 500] : nil
+      content_text = strip_html_to_plain_text(doc["content"] || doc["summary"] || "")
+
       {
         object_uri: object_id,
         actor_uri: attributed_to,
-        inbox_uri: inbox_uri
+        inbox_uri: actor_info[:inbox_uri],
+        target_url: target_url,
+        author_name: actor_info[:name],
+        author_handle: actor_info[:handle],
+        content_text: content_text
       }
     rescue SafeHTTP::Error, JSON::ParserError => e
       raise ResolutionError, e.message
     end
 
-    def fetch_actor_inbox(actor_uri, config:)
+    def fetch_actor_info(actor_uri, config:)
       res = HttpSig.signed_get(url: actor_uri, config: config)
       raise ResolutionError, "Actor fetch returned #{res[:status]}" unless res[:status].between?(200, 299)
 
@@ -415,9 +445,26 @@ module Rubicairn
       inbox = doc["inbox"]
       raise ResolutionError, "Actor missing inbox" if inbox.to_s.empty?
 
-      inbox
+      name = doc["name"].to_s.gsub(/[\r\n\t]+/, " ").strip[0, 120]
+      username = doc["preferredUsername"].to_s.strip
+      host = begin
+               URI.parse(actor_uri).host
+             rescue URI::InvalidURIError
+               nil
+             end
+      handle = (!username.empty? && host) ? "@#{username}@#{host}"[0, 200] : actor_uri.to_s[0, 200]
+
+      {
+        inbox_uri: inbox,
+        name: name.empty? ? username[0, 120] : name,
+        handle: handle
+      }
     rescue SafeHTTP::Error, JSON::ParserError => e
       raise ResolutionError, e.message
+    end
+
+    def fetch_actor_inbox(actor_uri, config:)
+      fetch_actor_info(actor_uri, config: config)[:inbox_uri]
     end
 
     def deliver(inbox_uri:, payload:, config:)

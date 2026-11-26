@@ -380,7 +380,12 @@ class RubicairnApp < Sinatra::Base
               "Content-Security-Policy" => CSP_HEADER
       @profile = profile
       @stats = profile_stats
-      @notes = db.list_public_notes(limit: 50)
+      notes = db.list_public_notes(limit: 50)
+      boosts = db.list_boosts(limit: 50)
+      @timeline = (notes.map { |n| n.merge("kind" => "note") } + boosts.map { |b| b.merge("kind" => "boost") })
+                  .sort_by { |item| item["created_at"].to_s }
+                  .reverse
+                  .first(50)
       erb :public
     end
   end
@@ -389,7 +394,8 @@ class RubicairnApp < Sinatra::Base
     halt 404, "Not Found" unless params["name"] == config.username
 
     notes = db.list_public_notes(limit: 50)
-    json_response(200, Rubicairn::ActivityPub.outbox_json(config, notes))
+    boosts = db.list_boosts(limit: 50)
+    json_response(200, Rubicairn::ActivityPub.outbox_json(config, notes, boosts: boosts))
   end
 
   get "/users/:name/notes/:id" do
@@ -410,7 +416,7 @@ class RubicairnApp < Sinatra::Base
               "Content-Security-Policy" => CSP_HEADER
       @profile = effective_profile
       @stats = profile_stats
-      @notes = [note.merge("like_count" => db.count_received_likes(note["id"]))]
+      @timeline = [note.merge("kind" => "note", "like_count" => db.count_received_likes(note["id"]))]
       erb :public
     end
   end
@@ -880,6 +886,11 @@ class RubicairnApp < Sinatra::Base
     end
 
     resolved = Rubicairn::ActivityPub.resolve_object(url, config: config)
+    if db.boosted_object?(resolved[:object_uri])
+      session[:flash_error] = "すでにブースト済みです。"
+      redirect base_redirect
+    end
+
     activity_id = Rubicairn::ActivityPub.generate_activity_id(config, "announce")
     payload = Rubicairn::ActivityPub.announce_activity(
       config,
@@ -893,7 +904,11 @@ class RubicairnApp < Sinatra::Base
       target_object_uri: resolved[:object_uri],
       target_actor_uri: resolved[:actor_uri],
       target_inbox_uri: resolved[:inbox_uri],
-      activity_id: activity_id
+      activity_id: activity_id,
+      target_url: resolved[:target_url],
+      target_author_name: resolved[:author_name],
+      target_author_handle: resolved[:author_handle],
+      target_content_text: resolved[:content_text]
     )
     redirect return_tab ? "/admin?tab=rss&msg=boosted" : "/admin?msg=boosted"
   rescue StandardError => e

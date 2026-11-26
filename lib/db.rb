@@ -54,6 +54,10 @@ module Rubicairn
         target_actor_uri TEXT NOT NULL,
         target_inbox_uri TEXT NOT NULL,
         activity_id TEXT NOT NULL,
+        target_url TEXT,
+        target_author_name TEXT,
+        target_author_handle TEXT,
+        target_content_text TEXT,
         created_at TEXT NOT NULL
       );
 
@@ -111,6 +115,14 @@ module Rubicairn
     def init_schema!
       @mutex.synchronize do
         @db.execute_batch(SCHEMA_SQL)
+        migrate_boosts_metadata_columns!
+      end
+    end
+
+    def migrate_boosts_metadata_columns!
+      cols = @db.execute("PRAGMA table_info(boosts)").map { |r| r["name"] }
+      %w[target_url target_author_name target_author_handle target_content_text].each do |col|
+        @db.execute("ALTER TABLE boosts ADD COLUMN #{col} TEXT") unless cols.include?(col)
       end
     end
 
@@ -366,16 +378,30 @@ module Rubicairn
 
     # --- Boosts (outbound) ---
 
-    def create_boost(target_object_uri:, target_actor_uri:, target_inbox_uri:, activity_id:, created_at: now_iso)
+    def create_boost(target_object_uri:, target_actor_uri:, target_inbox_uri:, activity_id:,
+                     target_url: nil, target_author_name: nil, target_author_handle: nil,
+                     target_content_text: nil, created_at: now_iso)
       @mutex.synchronize do
         @db.execute(
           <<~SQL,
-            INSERT INTO boosts (target_object_uri, target_actor_uri, target_inbox_uri, activity_id, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO boosts (
+              target_object_uri, target_actor_uri, target_inbox_uri, activity_id,
+              target_url, target_author_name, target_author_handle, target_content_text, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
           SQL
-          [target_object_uri, target_actor_uri, target_inbox_uri, activity_id, created_at]
+          [
+            target_object_uri, target_actor_uri, target_inbox_uri, activity_id,
+            target_url, target_author_name, target_author_handle, target_content_text, created_at
+          ]
         )
         @db.last_insert_row_id
+      end
+    end
+
+    def boosted_object?(target_object_uri)
+      @mutex.synchronize do
+        !@db.get_first_value("SELECT 1 FROM boosts WHERE target_object_uri = ?", [target_object_uri]).nil?
       end
     end
 
@@ -385,9 +411,22 @@ module Rubicairn
       end
     end
 
-    def list_boosts
+    def list_boosts(limit: 50)
       @mutex.synchronize do
-        @db.execute("SELECT * FROM boosts ORDER BY id DESC")
+        @db.execute("SELECT * FROM boosts ORDER BY created_at DESC, id DESC LIMIT ?", [limit])
+      end
+    end
+
+    def update_boost_metadata(id, target_url:, target_author_name:, target_author_handle:, target_content_text:)
+      @mutex.synchronize do
+        @db.execute(
+          <<~SQL,
+            UPDATE boosts
+            SET target_url = ?, target_author_name = ?, target_author_handle = ?, target_content_text = ?
+            WHERE id = ?
+          SQL
+          [target_url, target_author_name, target_author_handle, target_content_text, id]
+        )
       end
     end
 
