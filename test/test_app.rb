@@ -472,4 +472,203 @@ class TestApp < Minitest::Test
     assert_equal 200, res_json.status
     assert_equal "2026-11-26T02:15:00Z", JSON.parse(res_json.body)["published"]
   end
+
+  def test_resolve_object_html_autodiscovery_and_actor_url_error
+    orig_signed_get = Rubicairn::HttpSig.method(:signed_get)
+    Rubicairn::HttpSig.singleton_class.define_method(:signed_get) do |url:, **_kwargs|
+      case url
+      when "https://social.example/@info/post-1"
+        {
+          status: 200,
+          headers: { "content-type" => "text/html; charset=utf-8" },
+          body: '<html><head><link rel="alternate" type="application/activity+json" href="/notes/post-1"></head></html>'
+        }
+      when "https://social.example/notes/post-1"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate(
+            "id" => "https://social.example/notes/post-1",
+            "type" => "Note",
+            "attributedTo" => "https://social.example/users/info",
+            "content" => "<p>Hello</p>"
+          )
+        }
+      when "https://social.example/@info"
+        {
+          status: 200,
+          headers: { "content-type" => "text/html; charset=utf-8" },
+          body: '<html><head><link rel="alternate" type="application/activity+json" href="https://social.example/users/info"></head></html>'
+        }
+      when "https://social.example/users/info"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate(
+            "id" => "https://social.example/users/info",
+            "type" => "Organization",
+            "inbox" => "https://social.example/users/info/inbox"
+          )
+        }
+      else
+        { status: 404, headers: {}, body: "" }
+      end
+    end
+
+    resolved = Rubicairn::ActivityPub.resolve_object("https://social.example/@info/post-1", config: @config)
+    assert_equal "https://social.example/notes/post-1", resolved[:object_uri]
+    assert_equal "https://social.example/users/info", resolved[:actor_uri]
+    assert_equal "https://social.example/users/info/inbox", resolved[:inbox_uri]
+
+    err = assert_raises(Rubicairn::ActivityPub::ResolutionError) do
+      Rubicairn::ActivityPub.resolve_object("https://social.example/@info", config: @config)
+    end
+    assert_includes err.message, "このURLはアカウントのようです"
+  ensure
+    Rubicairn::HttpSig.singleton_class.define_method(:signed_get, orig_signed_get)
+  end
+
+  def test_rss_reader_falls_back_to_activitypub_outbox_on_html_response
+    orig_request = Rubicairn::SafeHTTP.method(:request)
+    Rubicairn::SafeHTTP.singleton_class.define_method(:request) do |url:, **_kwargs|
+      case url
+      when "https://social.example/@info.rss"
+        {
+          status: 200,
+          headers: { "content-type" => "text/html; charset=utf-8" },
+          body: "<!DOCTYPE html><html><head><link rel='stylesheet' href='/a.css'></head><body>Profile</body></html>"
+        }
+      when "https://social.example/users/info"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate("id" => "https://social.example/users/info", "outbox" => "https://social.example/users/info/outbox")
+        }
+      when "https://social.example/users/info/outbox"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate(
+            "type" => "OrderedCollection",
+            "first" => "https://social.example/users/info/outbox?page=true"
+          )
+        }
+      when "https://social.example/users/info/outbox?page=true"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate(
+            "type" => "OrderedCollectionPage",
+            "orderedItems" => [
+              {
+                "type" => "Create",
+                "published" => "2026-11-26T00:00:00Z",
+                "object" => {
+                  "id" => "https://social.example/notes/1",
+                  "type" => "Note",
+                  "url" => "https://social.example/@info/1",
+                  "published" => "2026-11-26T00:00:00Z",
+                  "content" => "<p>Hello &amp; <b>World</b></p>"
+                }
+              },
+              {
+                "type" => "Create",
+                "published" => "2026-11-25T00:00:00Z",
+                "object" => {
+                  "id" => "javascript:alert(1)",
+                  "type" => "Note",
+                  "url" => "javascript:alert(1)",
+                  "content" => "<p>Safe text only</p>"
+                }
+              }
+            ]
+          )
+        }
+      else
+        { status: 404, headers: {}, body: "" }
+      end
+    end
+
+    res = Rubicairn::RssReader.new(@config).fetch_all(
+      [
+        {
+          "handle" => "info@social.example",
+          "actor_uri" => "https://social.example/users/info",
+          "rss_url" => "https://social.example/@info.rss"
+        }
+      ],
+      force: true
+    )
+
+    assert_empty res[:errors]
+    assert_equal 2, res[:items].size
+    assert_equal "info@social.example", res[:items].first[:author]
+    assert_equal "https://social.example/@info/1", res[:items].first[:url]
+    assert_equal "Hello & World", res[:items].first[:text]
+    assert_nil res[:items].last[:url]
+    assert_equal "Safe text only", res[:items].last[:text]
+  ensure
+    Rubicairn::SafeHTTP.singleton_class.define_method(:request, orig_request)
+  end
+
+  def test_admin_rss_tab_protects_handles_from_email_obfuscation
+    @db.create_following(
+      actor_uri: "https://social.example/users/info",
+      inbox_uri: "https://social.example/users/info/inbox",
+      handle: "info@social.example",
+      rss_url: "https://social.example/@info.rss",
+      follow_activity_id: "https://example.com/users/alice#follow-2"
+    )
+
+    orig_request = Rubicairn::SafeHTTP.method(:request)
+    Rubicairn::SafeHTTP.singleton_class.define_method(:request) do |url:, **_kwargs|
+      case url
+      when "https://social.example/@info.rss"
+        {
+          status: 200,
+          headers: { "content-type" => "text/html; charset=utf-8" },
+          body: "<html><body>no rss</body></html>"
+        }
+      when "https://social.example/users/info"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate("id" => "https://social.example/users/info", "outbox" => "https://social.example/users/info/outbox")
+        }
+      when "https://social.example/users/info/outbox"
+        {
+          status: 200,
+          headers: { "content-type" => "application/activity+json" },
+          body: JSON.generate(
+            "type" => "OrderedCollection",
+            "orderedItems" => [
+              {
+                "type" => "Create",
+                "published" => "2026-11-26T00:00:00Z",
+                "object" => {
+                  "id" => "https://social.example/notes/1",
+                  "type" => "Note",
+                  "url" => "https://social.example/@info/1",
+                  "published" => "2026-11-26T00:00:00Z",
+                  "content" => "<p>Inline action test</p>"
+                }
+              }
+            ]
+          )
+        }
+      else
+        { status: 404, headers: {}, body: "" }
+      end
+    end
+
+    res = @req.get("/admin?tab=rss&refresh_rss=1", admin_headers)
+    assert_equal 200, res.status
+    assert_includes res.body, "<!--email_off-->info<span>@</span>social.example"
+    assert_includes res.body, 'action="/admin/likes"'
+    assert_includes res.body, 'action="/admin/boosts"'
+    assert_includes res.body, 'name="return_tab" value="rss"'
+    assert_includes res.body, 'value="https://social.example/@info/1"'
+  ensure
+    Rubicairn::SafeHTTP.singleton_class.define_method(:request, orig_request)
+  end
 end

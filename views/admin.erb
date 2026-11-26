@@ -80,7 +80,7 @@
     <div class="flash">完了: <%= h(@msg) %></div>
   <% end %>
   <% if @flash_error && !@flash_error.empty? %>
-    <div class="flash error">エラー: <%= h(@flash_error) %></div>
+    <div class="flash error">エラー: <%= safe_at_html(@flash_error) %></div>
   <% end %>
 
   <% if @tab == "posts" %>
@@ -182,7 +182,7 @@
         <a href="/admin?tab=rss&refresh_rss=1">強制更新</a>
       </div>
       <% if @rss_data && !@rss_data[:errors].empty? %>
-        <div class="flash error"><%= h(@rss_data[:errors].join(" / ")) %></div>
+        <div class="flash error"><%= safe_at_html(@rss_data[:errors].join(" / ")) %></div>
       <% end %>
       <% items = @rss_data ? @rss_data[:items] : [] %>
       <% if items.empty? %>
@@ -190,10 +190,24 @@
       <% else %>
         <% items.each do |item| %>
           <div class="item">
-            <div class="small"><strong><%= h(item[:author]) %></strong> · <%= h(format_local_time(item[:published_at])) %></div>
+            <div class="small"><strong><%= safe_at_html(item[:author]) %></strong> · <%= h(format_local_time(item[:published_at])) %></div>
             <div><%= h(item[:text]) %></div>
             <% if safe_url?(item[:url]) %>
-              <div class="small"><a href="<%= h(item[:url]) %>" rel="nofollow noopener noreferrer" target="_blank"><%= h(item[:url]) %></a></div>
+              <div class="small" style="margin-top: 4px;">
+                <a href="<%= h(item[:url]) %>" rel="nofollow noopener noreferrer" target="_blank"><%= h(item[:url]) %></a>
+                <form class="inline" method="post" action="/admin/likes" style="margin-left: 8px;">
+                  <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+                  <input type="hidden" name="url" value="<%= h(item[:url]) %>">
+                  <input type="hidden" name="return_tab" value="rss">
+                  <button class="outline" type="submit" style="padding: 2px 8px; font-size: 0.78rem;">いいね</button>
+                </form>
+                <form class="inline" method="post" action="/admin/boosts" style="margin-left: 4px;">
+                  <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+                  <input type="hidden" name="url" value="<%= h(item[:url]) %>">
+                  <input type="hidden" name="return_tab" value="rss">
+                  <button class="outline" type="submit" style="padding: 2px 8px; font-size: 0.78rem;">ブースト</button>
+                </form>
+              </div>
             <% end %>
           </div>
         <% end %>
@@ -265,7 +279,7 @@
         <% @followings.each do |f| %>
           <div class="item item-head">
             <div>
-              <div><strong><%= h(f["handle"]) %></strong></div>
+              <div><strong><%= safe_at_html(f["handle"]) %></strong></div>
               <div class="small"><%= h(f["rss_url"]) %></div>
             </div>
             <form class="inline" method="post" action="/admin/follows/<%= f["id"] %>/undo">

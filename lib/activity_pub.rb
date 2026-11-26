@@ -21,6 +21,7 @@ module Rubicairn
 
     AS_CONTEXT = "https://www.w3.org/ns/activitystreams"
     PUBLIC_COLLECTION = "https://www.w3.org/ns/activitystreams#Public"
+    ACTOR_TYPES = %w[Person Organization Service Group Application].freeze
 
     module_function
 
@@ -252,28 +253,68 @@ module Rubicairn
       raise ResolutionError, e.message
     end
 
+    def discover_activitypub_url(html, base_url)
+      snippet = html.to_s[0, 65_536]
+      snippet.scan(/<link\b[^>]*>/i) do |tag|
+        attrs = {}
+        tag.scan(/\b([a-z][a-z0-9_-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i) do |k, v1, v2, v3|
+          attrs[k.downcase] = CGI.unescapeHTML(v1 || v2 || v3 || "")
+        end
+        next unless attrs["rel"].to_s.downcase.split.include?("alternate")
+        next unless attrs["type"].to_s.match?(%r{application/(activity|ld)\+json}i)
+
+        href = attrs["href"].to_s.strip
+        next if href.empty?
+
+        begin
+          resolved = URI.join(base_url, href).to_s
+          SafeHTTP.parse_http_uri!(resolved)
+          return resolved
+        rescue URI::InvalidURIError, SafeHTTP::Error
+          next
+        end
+      end
+      nil
+    end
+
+    def extract_actor_hash(actor_doc, fallback_uri)
+      return nil unless actor_doc.is_a?(Hash) && !actor_doc["id"].to_s.empty? && !actor_doc["inbox"].to_s.empty?
+
+      actor_uri = actor_doc["id"].to_s
+      inbox_uri = actor_doc["inbox"].to_s
+      user = actor_doc["preferredUsername"].to_s
+      user = fallback_uri.path.split("/").reject(&:empty?).last.to_s.delete_prefix("@") if user.empty?
+      host = URI.parse(actor_uri).host || fallback_uri.host
+      {
+        actor_uri: actor_uri,
+        inbox_uri: inbox_uri,
+        user: user,
+        host: host,
+        handle: "#{user}@#{host}"
+      }
+    end
+
     def resolve_actor_url(url, config:)
       uri = SafeHTTP.parse_http_uri!(url)
       actor_res = HttpSig.signed_get(url: url, config: config)
       if actor_res[:status].between?(200, 299)
         begin
           actor_doc = JSON.parse(actor_res[:body])
-          if actor_doc.is_a?(Hash) && !actor_doc["id"].to_s.empty? && !actor_doc["inbox"].to_s.empty?
-            actor_uri = actor_doc["id"].to_s
-            inbox_uri = actor_doc["inbox"].to_s
-            user = actor_doc["preferredUsername"].to_s
-            user = uri.path.split("/").reject(&:empty?).last.to_s.delete_prefix("@") if user.empty?
-            host = URI.parse(actor_uri).host || uri.host
-            return {
-              actor_uri: actor_uri,
-              inbox_uri: inbox_uri,
-              user: user,
-              host: host,
-              handle: "#{user}@#{host}"
-            }
-          end
+          parsed = extract_actor_hash(actor_doc, uri)
+          return parsed if parsed
         rescue JSON::ParserError
-          # Fallback to WebFinger when profile URL returns HTML
+          alt_url = discover_activitypub_url(actor_res[:body], url)
+          if alt_url
+            alt_res = HttpSig.signed_get(url: alt_url, config: config)
+            if alt_res[:status].between?(200, 299)
+              begin
+                parsed = extract_actor_hash(JSON.parse(alt_res[:body]), uri)
+                return parsed if parsed
+              rescue JSON::ParserError
+                # Fall through to WebFinger
+              end
+            end
+          end
         end
       end
 
@@ -324,7 +365,24 @@ module Rubicairn
       obj_res = HttpSig.signed_get(url: post_url, config: config)
       raise ResolutionError, "Object fetch returned #{obj_res[:status]}" unless obj_res[:status].between?(200, 299)
 
-      doc = JSON.parse(obj_res[:body])
+      doc = begin
+              JSON.parse(obj_res[:body])
+            rescue JSON::ParserError
+              alt_url = discover_activitypub_url(obj_res[:body], post_url)
+              raise ResolutionError, "投稿の ActivityPub JSON を取得できませんでした" unless alt_url
+
+              alt_res = HttpSig.signed_get(url: alt_url, config: config)
+              raise ResolutionError, "Object fetch returned #{alt_res[:status]}" unless alt_res[:status].between?(200, 299)
+
+              JSON.parse(alt_res[:body])
+            end
+
+      raise ResolutionError, "投稿の ActivityPub JSON が不正です" unless doc.is_a?(Hash)
+
+      if ACTOR_TYPES.include?(doc["type"].to_s) || (doc["attributedTo"].nil? && !doc["inbox"].to_s.empty?)
+        raise ResolutionError, "このURLはアカウントのようです。ブースト／いいねには個別の投稿URLを指定してください。"
+      end
+
       object_id = doc["id"]
       attr_raw = doc["attributedTo"]
       attributed_to = case attr_raw
