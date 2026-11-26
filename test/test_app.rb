@@ -790,4 +790,37 @@ class TestApp < Minitest::Test
     assert_equal "Migrated text", row["target_content_text"]
     migrated.close
   end
+
+  def test_favicons_and_minimal_admin_pwa_manifest
+    res_manifest = @req.get("/manifest.webmanifest")
+    assert_equal 200, res_manifest.status
+    assert_includes res_manifest.content_type, "application/manifest+json"
+    manifest = JSON.parse(res_manifest.body)
+    assert_equal "/admin", manifest["start_url"]
+    assert_equal "standalone", manifest["display"]
+    icon_srcs = manifest["icons"].map { |i| i["src"] }
+    assert_includes icon_srcs, "/icon-192.png"
+    assert_includes icon_srcs, "/icon-512.png"
+
+    %w[/favicon.svg /favicon.ico /apple-touch-icon.png /icon-192.png /icon-512.png].each do |path|
+      res_asset = @req.get(path)
+      assert_equal 200, res_asset.status, "Expected #{path} to return 200"
+      refute_empty res_asset.body
+    end
+
+    res_pub = @req.get("/users/alice", "HTTP_ACCEPT" => "text/html")
+    assert_equal 200, res_pub.status
+    assert_includes res_pub.body, 'href="/favicon.svg"'
+    assert_includes res_pub.body, 'href="/apple-touch-icon.png"'
+    refute_includes res_pub.body, "/manifest.webmanifest"
+    assert_includes res_pub.headers["content-security-policy"], "default-src 'none'"
+    refute_includes res_pub.headers["content-security-policy"], "script-src"
+
+    res_admin = @req.get("/admin", admin_headers)
+    assert_equal 200, res_admin.status
+    assert_includes res_admin.body, 'href="/manifest.webmanifest"'
+    assert_includes res_admin.body, 'name="apple-mobile-web-app-capable"'
+    assert_includes res_admin.headers["content-security-policy"], "manifest-src 'self'"
+    assert_includes res_admin.headers["content-security-policy"], "img-src 'self'"
+  end
 end
