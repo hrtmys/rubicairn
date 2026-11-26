@@ -1,0 +1,36 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+require "openssl"
+require_relative "../lib/db"
+
+FileUtils.mkdir_p("data")
+FileUtils.mkdir_p("config")
+
+app_yml = "config/app.yml"
+example_yml = "config/app.yml.example"
+if !File.exist?(app_yml) && File.exist?(example_yml)
+  FileUtils.cp(example_yml, app_yml)
+  puts "Created #{app_yml} from #{example_yml}"
+end
+
+private_pem = "config/private.pem"
+enc_pem = "config/private.pem.enc"
+public_pem = "config/public.pem"
+
+if !File.exist?(enc_pem) && !File.exist?(private_pem)
+  key = OpenSSL::PKey::RSA.new(2048)
+  File.open(private_pem, "wb", 0o600) { |f| f.write(key.to_pem) }
+  File.chmod(0o600, private_pem)
+  File.write(public_pem, key.public_key.to_pem)
+  puts "Generated 2048-bit RSA key at #{private_pem} and #{public_pem}"
+elsif File.exist?(private_pem) && !File.exist?(public_pem)
+  key = OpenSSL::PKey::RSA.new(File.read(private_pem))
+  File.write(public_pem, key.public_key.to_pem)
+  puts "Exported #{public_pem}"
+end
+
+db = Rubicairn::DB.new("data/core.db")
+db.close
+puts "Initialized database at data/core.db"

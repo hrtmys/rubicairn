@@ -1,0 +1,12 @@
+domain: "example.com"
+username: "alice"
+display_name: "Alice"
+summary: "Single-user Rubicairn instance. Replies and mentions are not received."
+contact: "admin@example.com"
+repository_url: "https://github.com/hrtmys/rubicairn"
+admin_email: "alice@example.com"
+max_followers: 50
+rss_cache_seconds: 600
+http_open_timeout: 3
+http_read_timeout: 5
+timezone_offset: "+09:00"

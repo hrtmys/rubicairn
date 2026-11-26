@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="<%= h(session[:csrf_token]) %>">
+  <title>Passkey 認証 - <%= h(config.domain) %></title>
+  <style>
+    :root { --bg: #fff; --surface: #fafafa; --ink: #111; --muted: #666; --border: #e5e5e5; --danger: #b91c1c; --ok: #166534; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0f0f10; --surface: #171719; --ink: #ececec; --muted: #9a9a9f; --border: #262629; --danger: #ef4444; --ok: #4ade80; }
+    }
+    * { box-sizing: border-box; }
+    body { max-width: 540px; margin: 48px auto; padding: 0 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", sans-serif; line-height: 1.65; color: var(--ink); background: var(--bg); }
+    h1 { font-size: 1.35rem; margin: 0 0 6px; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+    .box { border-top: 1px solid var(--border); padding-top: 20px; margin-top: 20px; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 9px 10px; margin: 4px 0 12px; font-size: 0.95rem; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 2px; }
+    button { padding: 10px 18px; font-size: 0.92rem; border: 1px solid var(--ink); border-radius: 2px; background: var(--ink); color: var(--bg); cursor: pointer; }
+    button.outline { background: transparent; color: var(--ink); border-color: var(--border); }
+    .flash { padding: 10px 12px; border-left: 2px solid var(--ok); background: var(--surface); margin-bottom: 16px; font-size: 0.9rem; }
+    .flash.error { border-left-color: var(--danger); color: var(--danger); }
+    .hidden { display: none; }
+    .recovery-code { font-family: monospace; font-size: 0.9rem; padding: 12px; background: var(--surface); border: 1px solid var(--border); word-break: break-all; user-select: all; margin: 12px 0; }
+    details { margin-top: 24px; font-size: 0.9rem; color: var(--muted); }
+    summary { cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1><%= h(@profile[:display_name]) %></h1>
+  <div class="sub"><%= safe_at_html("@#{config.username}@#{config.domain}") %> · Passkey ロック</div>
+
+  <% if @msg && !@msg.empty? %>
+    <div class="flash">状態: <%= h(@msg) %></div>
+  <% end %>
+  <% if @flash_error && !@flash_error.empty? %>
+    <div class="flash error">エラー: <%= h(@flash_error) %></div>
+  <% end %>
+  <div id="status-box" class="flash error hidden"></div>
+
+  <% if @credentials_count == 0 && !@vault_sealed %>
+    <div class="box">
+      <p>初回セットアップです。Passkey を登録すると、ActivityPub 署名用の秘密鍵（<code>private.pem</code>）が <strong>AES-256-GCM で暗号化</strong>され、Passkey 認証なしでは署名・投稿・フォロー操作が物理的に不可能になります。</p>
+      <label for="reg-nickname">端末名（識別用）</label>
+      <input type="text" id="reg-nickname" value="Primary Passkey" maxlength="60">
+      <div id="prf-fallback-wrap" class="hidden">
+        <label for="reg-passphrase">ボールトパスフレーズ（このブラウザは Passkey PRF 非対応のため 12 文字以上で設定してください）</label>
+        <input type="password" id="reg-passphrase" minlength="12" placeholder="12文字以上">
+      </div>
+      <button type="button" id="btn-register">Passkey を登録して秘密鍵を暗号化</button>
+    </div>
+
+    <div id="recovery-panel" class="box hidden">
+      <div class="flash">秘密鍵を暗号化し、Passkey を登録しました。</div>
+      <p><strong>緊急用リカバリーキー（今回のみ表示）</strong><br>端末を紛失した場合にのみ使用します。安全な場所に保管してください。</p>
+      <div id="recovery-key-val" class="recovery-code"></div>
+      <a href="/admin"><button type="button">保管したので管理画面へ進む</button></a>
+    </div>
+  <% else %>
+    <div class="box">
+      <p>管理画面へのアクセスおよび秘密鍵のメモリ復号を行うため、Passkey で認証してください。</p>
+      <div id="login-passphrase-wrap" class="hidden">
+        <label for="login-passphrase">ボールトパスフレーズ</label>
+        <input type="password" id="login-passphrase" placeholder="12文字以上">
+      </div>
+      <button type="button" id="btn-login">Passkey でロック解除</button>
+    </div>
+
+    <% if @has_recovery %>
+      <details>
+        <summary>Passkey を紛失した場合（リカバリーキーで解除）</summary>
+        <form method="post" action="/admin/webauthn/recover" style="margin-top: 12px;">
+          <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+          <label for="recovery_key">リカバリーキー（64桁の16進文字列）</label>
+          <input type="text" id="recovery_key" name="recovery_key" required pattern="[0-9a-fA-F]{64}">
+          <button type="submit" class="outline">リカバリーキーでロック解除</button>
+        </form>
+      </details>
+    <% end %>
+  <% end %>
+
+  <script nonce="<%= @csp_nonce %>">
+    (function () {
+      const csrf = document.querySelector('meta[name="csrf-token"]').content;
+      const statusBox = document.getElementById("status-box");
+
+      function showError(msg) {
+        statusBox.textContent = msg;
+        statusBox.classList.remove("hidden");
+      }
+
+      function b64urlToBuf(str) {
+        const pad = "=".repeat((4 - (str.length % 4)) % 4);
+        const b64 = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes.buffer;
+      }
+
+      function bufToB64url(buf) {
+        const bytes = new Uint8Array(buf);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      }
+
+      async function postJson(url, payload) {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify(payload || {})
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || "認証に失敗しました");
+        return data;
+      }
+
+      const regBtn = document.getElementById("btn-register");
+      if (regBtn) {
+        regBtn.addEventListener("click", async () => {
+          statusBox.classList.add("hidden");
+          try {
+            const init = await postJson("/admin/webauthn/register/options");
+            const opts = init.options;
+            opts.challenge = b64urlToBuf(opts.challenge);
+            opts.user.id = b64urlToBuf(opts.user.id);
+            if (opts.excludeCredentials) {
+              opts.excludeCredentials = opts.excludeCredentials.map(c => ({ ...c, id: b64urlToBuf(c.id) }));
+            }
+            const saltBuf = b64urlToBuf(init.prf_salt);
+            opts.extensions = { prf: { eval: { first: saltBuf } } };
+
+            const cred = await navigator.credentials.create({ publicKey: opts });
+            const ext = cred.getClientExtensionResults ? cred.getClientExtensionResults() : {};
+            let prfOut = null;
+            if (ext.prf && ext.prf.results && ext.prf.results.first) {
+              prfOut = bufToB64url(ext.prf.results.first);
+            } else if (ext.prf && ext.prf.enabled) {
+              const assertRes = await navigator.credentials.get({
+                publicKey: {
+                  challenge: opts.challenge,
+                  allowCredentials: [{ type: "public-key", id: cred.rawId }],
+                  userVerification: "required",
+                  extensions: { prf: { eval: { first: saltBuf } } }
+                }
+              });
+              const aExt = assertRes.getClientExtensionResults();
+              if (aExt.prf && aExt.prf.results && aExt.prf.results.first) {
+                prfOut = bufToB64url(aExt.prf.results.first);
+              }
+            }
+
+            let wrapMode = "prf";
+            let passphrase = "";
+            if (!prfOut) {
+              wrapMode = "passphrase";
+              const wrap = document.getElementById("prf-fallback-wrap");
+              wrap.classList.remove("hidden");
+              passphrase = document.getElementById("reg-passphrase").value;
+              if (passphrase.length < 12) {
+                showError("この環境は PRF 非対応のため、12文字以上のパスフレーズを入力して再度押してください。");
+                return;
+              }
+            }
+
+            const verifyPayload = {
+              nickname: document.getElementById("reg-nickname").value,
+              wrap_mode: wrapMode,
+              prf_output: prfOut,
+              vault_passphrase: passphrase,
+              credential: {
+                id: cred.id,
+                rawId: bufToB64url(cred.rawId),
+                type: cred.type,
+                response: {
+                  attestationObject: bufToB64url(cred.response.attestationObject),
+                  clientDataJSON: bufToB64url(cred.response.clientDataJSON)
+                }
+              }
+            };
+
+            const done = await postJson("/admin/webauthn/register/verify", verifyPayload);
+            if (done.recovery_key) {
+              document.getElementById("recovery-key-val").textContent = done.recovery_key;
+              document.getElementById("recovery-panel").classList.remove("hidden");
+              regBtn.disabled = true;
+            } else {
+              window.location.href = done.redirect || "/admin";
+            }
+          } catch (err) {
+            showError(err.message);
+          }
+        });
+      }
+
+      const loginBtn = document.getElementById("btn-login");
+      if (loginBtn) {
+        loginBtn.addEventListener("click", async () => {
+          statusBox.classList.add("hidden");
+          try {
+            const init = await postJson("/admin/webauthn/login/options");
+            const opts = init.options;
+            opts.challenge = b64urlToBuf(opts.challenge);
+            if (opts.allowCredentials) {
+              opts.allowCredentials = opts.allowCredentials.map(c => ({ ...c, id: b64urlToBuf(c.id) }));
+            }
+
+            const evalByCred = {};
+            Object.entries(init.prf_salts || {}).forEach(([id, saltB64]) => {
+              evalByCred[id] = { first: b64urlToBuf(saltB64) };
+            });
+            opts.extensions = { prf: { evalByCredential: evalByCred } };
+
+            const cred = await navigator.credentials.get({ publicKey: opts });
+            const mode = (init.wrap_modes || {})[cred.id] || "prf";
+            const ext = cred.getClientExtensionResults ? cred.getClientExtensionResults() : {};
+            const prfOut = (ext.prf && ext.prf.results && ext.prf.results.first)
+              ? bufToB64url(ext.prf.results.first)
+              : null;
+
+            let passphrase = "";
+            if (mode === "passphrase") {
+              document.getElementById("login-passphrase-wrap").classList.remove("hidden");
+              passphrase = document.getElementById("login-passphrase").value;
+              if (!passphrase) {
+                showError("パスフレーズを入力して再度押してください。");
+                return;
+              }
+            }
+
+            const verifyPayload = {
+              prf_output: prfOut,
+              vault_passphrase: passphrase,
+              credential: {
+                id: cred.id,
+                rawId: bufToB64url(cred.rawId),
+                type: cred.type,
+                response: {
+                  authenticatorData: bufToB64url(cred.response.authenticatorData),
+                  clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+                  signature: bufToB64url(cred.response.signature),
+                  userHandle: cred.response.userHandle ? bufToB64url(cred.response.userHandle) : null
+                }
+              }
+            };
+
+            const done = await postJson("/admin/webauthn/login/verify", verifyPayload);
+            window.location.href = done.redirect || "/admin";
+          } catch (err) {
+            showError(err.message);
+          }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

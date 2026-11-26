@@ -1,0 +1,157 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "digest"
+require "fileutils"
+require "json"
+require "time"
+require_relative "../lib/config"
+require_relative "../lib/safe_http"
+
+LOCKFILE_PATH = "Gemfile.lock"
+OUTPUT_PATH = "data/security_advisories.json"
+OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
+OSV_VULN_URL = "https://api.osv.dev/v1/vulns/"
+MAX_VULN_FETCHES = 30
+
+def parse_lockfile_gems(path)
+  return [] unless File.exist?(path)
+
+  gems = {}
+  in_specs = false
+  File.readlines(path, encoding: "UTF-8").each do |line|
+    if line.strip == "specs:"
+      in_specs = true
+      next
+    elsif in_specs && !line.start_with?("    ")
+      in_specs = false
+      next
+    end
+
+    next unless in_specs
+    next unless line.chomp =~ /\A    ([a-zA-Z0-9._-]+) \(([^)]+)\)\z/
+
+    name = Regexp.last_match(1)
+    raw_ver = Regexp.last_match(2)
+    version = raw_ver.split("-", 2).first
+    gems[name] ||= version
+  end
+  gems.map { |name, version| { name: name, version: version } }
+end
+
+def extract_severity(vuln)
+  db_sev = vuln.dig("database_specific", "severity").to_s.upcase
+  return db_sev if %w[CRITICAL HIGH MODERATE MEDIUM LOW].include?(db_sev)
+
+  sevs = vuln["severity"].is_a?(Array) ? vuln["severity"] : []
+  score_str = sevs.first&.dig("score").to_s
+  if score_str =~ /CVSS:3\.[01]\/.*/
+    return "HIGH" if score_str.include?("/C:H/I:H/A:H")
+  end
+  "UNKNOWN"
+end
+
+def extract_fixed_version(vuln, gem_name)
+  affected = vuln["affected"].is_a?(Array) ? vuln["affected"] : []
+  affected.each do |aff|
+    pkg = aff["package"]
+    next unless pkg.is_a?(Hash) && pkg["name"] == gem_name
+
+    ranges = aff["ranges"].is_a?(Array) ? aff["ranges"] : []
+    ranges.each do |r|
+      events = r["events"].is_a?(Array) ? r["events"] : []
+      events.each do |ev|
+        return ev["fixed"] if ev.is_a?(Hash) && ev["fixed"]
+      end
+    end
+  end
+  nil
+end
+
+config = if File.exist?("config/app.yml")
+           Rubicairn::Config.load
+         else
+           Rubicairn::Config.new("domain" => "example.com", "username" => "rubicairn")
+         end
+
+gems = parse_lockfile_gems(LOCKFILE_PATH)
+if gems.empty?
+  warn "No gems found in #{LOCKFILE_PATH}"
+  exit 1
+end
+
+batch_body = JSON.generate(
+  {
+    "queries" => gems.map do |g|
+      { "package" => { "name" => g[:name], "ecosystem" => "RubyGems" }, "version" => g[:version] }
+    end
+  }
+)
+
+batch_res = Rubicairn::SafeHTTP.request(
+  method: :post,
+  url: OSV_BATCH_URL,
+  headers: { "Content-Type" => "application/json", "Accept" => "application/json" },
+  body: batch_body,
+  config: config,
+  max_bytes: 524_288
+)
+
+unless batch_res[:status].between?(200, 299)
+  warn "OSV batch query failed with HTTP #{batch_res[:status]}"
+  exit 1
+end
+
+batch_doc = JSON.parse(batch_res[:body])
+results = batch_doc["results"].is_a?(Array) ? batch_doc["results"] : []
+
+matched_ids = {}
+results.each_with_index do |entry, idx|
+  gem_info = gems[idx]
+  next unless gem_info && entry.is_a?(Hash) && entry["vulns"].is_a?(Array)
+
+  entry["vulns"].each do |v|
+    vid = v["id"].to_s
+    next if vid.empty?
+
+    matched_ids[vid] ||= gem_info
+  end
+end
+
+advisories = []
+matched_ids.keys.first(MAX_VULN_FETCHES).each do |vid|
+  gem_info = matched_ids[vid]
+  vuln_res = Rubicairn::SafeHTTP.request(
+    method: :get,
+    url: "#{OSV_VULN_URL}#{vid}",
+    headers: { "Accept" => "application/json" },
+    config: config,
+    max_bytes: 262_144
+  )
+  next unless vuln_res[:status].between?(200, 299)
+
+  vuln = JSON.parse(vuln_res[:body])
+  advisories << {
+    "id" => vid,
+    "gem" => gem_info[:name],
+    "installed_version" => gem_info[:version],
+    "severity" => extract_severity(vuln),
+    "fixed_version" => extract_fixed_version(vuln, gem_info[:name]),
+    "summary" => vuln["summary"].to_s[0, 200],
+    "url" => "https://osv.dev/vulnerability/#{vid}"
+  }
+end
+
+FileUtils.mkdir_p(File.dirname(OUTPUT_PATH))
+tmp_path = "#{OUTPUT_PATH}.tmp.#{Process.pid}"
+payload = {
+  "checked_at" => Time.now.utc.iso8601,
+  "ruby_version" => RUBY_VERSION,
+  "lockfile_sha256" => Digest::SHA256.file(LOCKFILE_PATH).hexdigest,
+  "gems_checked" => gems.size,
+  "advisories" => advisories
+}
+File.write(tmp_path, JSON.pretty_generate(payload))
+File.rename(tmp_path, OUTPUT_PATH)
+
+puts "Checked #{gems.size} gem(s) against OSV.dev: #{advisories.size} advisory(ies) found."

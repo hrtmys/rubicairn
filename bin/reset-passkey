@@ -1,0 +1,38 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require_relative "../lib/config"
+require_relative "../lib/db"
+
+config = Rubicairn::Config.load
+db = Rubicairn::DB.new("data/core.db")
+
+args = ARGV.dup
+if args.include?("--status") || args.empty?
+  creds = db.list_webauthn_credentials
+  puts "Vault sealed: #{config.key_vault.sealed?}"
+  puts "Registered Passkeys: #{creds.size}"
+  creds.each do |c|
+    puts "  - ##{c['id']} #{c['nickname']} (#{c['wrap_mode']}, used: #{c['last_used_at'] || 'never'})"
+  end
+  puts "Recovery key configured: #{!db.get_vault_recovery.nil?}"
+  if args.empty?
+    puts "\nTo clear lost Passkeys (keeping encrypted vault & recovery key):"
+    puts "  bundle exec ruby bin/reset-passkey --clear-credentials --confirm"
+  end
+elsif args.include?("--clear-credentials")
+  unless args.include?("--confirm")
+    warn "Refusing without --confirm flag."
+    exit 1
+  end
+
+  creds = db.list_webauthn_credentials
+  creds.each { |c| db.delete_webauthn_credential(c["id"]) }
+  puts "Cleared #{creds.size} Passkey credential(s). Encrypted vault and recovery key were preserved."
+  puts "Visit /admin/auth and unlock with your Recovery Key to register a new Passkey."
+else
+  warn "Unknown arguments: #{args.join(' ')}"
+  exit 1
+end
+
+db.close
