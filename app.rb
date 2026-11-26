@@ -18,7 +18,7 @@ require_relative "lib/webauthn_service"
 
 # Single-user ActivityPub (Mastodon-compatible) server.
 class RubicairnApp < Sinatra::Base
-  CSP_HEADER = "default-src 'none'; style-src 'unsafe-inline';"
+  CSP_HEADER = "default-src 'none'; style-src 'unsafe-inline'; img-src 'self';"
   MAX_INBOX_BYTES = 65_536
 
   set :sessions, true
@@ -27,6 +27,8 @@ class RubicairnApp < Sinatra::Base
   set :method_override, false
   set :host_authorization, { permitted_hosts: [] }
   set :views, File.expand_path("views", __dir__)
+  set :public_folder, File.expand_path("public", __dir__)
+  set :static_cache_control, [:public, { max_age: 86_400 }]
 
   set :app_config, nil
   set :app_db, nil
@@ -239,7 +241,7 @@ class RubicairnApp < Sinatra::Base
     end
 
     def admin_csp_header(nonce)
-      "default-src 'none'; script-src 'nonce-#{nonce}'; style-src 'unsafe-inline'; connect-src 'self';"
+      "default-src 'none'; script-src 'nonce-#{nonce}'; style-src 'unsafe-inline'; img-src 'self'; manifest-src 'self'; connect-src 'self';"
     end
 
     def passkey_session_valid?
@@ -353,6 +355,25 @@ class RubicairnApp < Sinatra::Base
   rescue StandardError
     status 500
     "error"
+  end
+
+  get "/manifest.webmanifest" do
+    profile = effective_profile
+    headers "Cache-Control" => "public, max-age=3600"
+    manifest = {
+      "name" => "#{profile[:display_name]} - Rubicairn",
+      "short_name" => "Rubicairn",
+      "start_url" => "/admin",
+      "scope" => "/",
+      "display" => "standalone",
+      "background_color" => "#141416",
+      "theme_color" => "#141416",
+      "icons" => [
+        { "src" => "/icon-192.png", "sizes" => "192x192", "type" => "image/png", "purpose" => "any maskable" },
+        { "src" => "/icon-512.png", "sizes" => "512x512", "type" => "image/png", "purpose" => "any maskable" }
+      ]
+    }
+    json_response(200, manifest, content_type: "application/manifest+json")
   end
 
   get "/.well-known/webfinger" do
