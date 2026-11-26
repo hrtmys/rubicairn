@@ -1,0 +1,7 @@
+config/app.yml
+config/private.pem
+config/private.pem.enc
+config/public.pem
+data/core.db*
+data/trends.json
+data/security_advisories.json

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>プライバシーポリシー - <%= h(config.domain) %></title>
+  <style>
+    :root { --bg: #fff; --ink: #111; --muted: #666; --border: #e5e5e5; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0f0f10; --ink: #ececec; --muted: #9a9a9f; --border: #262629; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", sans-serif; line-height: 1.75; }
+    a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--muted); }
+    .topbar { border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; max-width: 760px; margin: 0 auto; font-size: 0.9rem; }
+    main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+    h1 { margin: 0 0 24px; font-size: 1.5rem; }
+    h2 { margin: 28px 0 8px; font-size: 1.05rem; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+    p, ul { margin: 8px 0 14px; }
+    .note-box { padding: 12px 14px; border-left: 2px solid var(--ink); margin: 16px 0; }
+    details.contact-reveal { display: inline-block; vertical-align: middle; }
+    details.contact-reveal summary { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--muted); list-style: none; }
+    details.contact-reveal summary::-webkit-details-marker { display: none; }
+    .m-addr { display: inline-block; margin-left: 8px; padding: 2px 8px; border: 1px solid var(--border); font-family: monospace; font-size: 0.9rem; user-select: all; }
+    .m-addr::before { content: attr(data-a) attr(data-b) "\0040" attr(data-c) attr(data-d); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a href="/users/<%= h(config.username) %>"><%= h(config.domain) %></a>
+    <a href="/users/<%= h(config.username) %>">← プロフィールへ戻る</a>
+  </header>
+
+  <main>
+    <h1>プライバシーポリシー</h1>
+
+    <h2>1. 本サーバーについて</h2>
+    <p><strong><%= h(config.domain) %></strong> は、<%= h(@profile[:display_name]) %>（<%= safe_at_html("@#{config.username}@#{config.domain}") %>）が個人で運用する単一ユーザー向け ActivityPub サーバー（Rubicairn）です。</p>
+
+    <h2>2. 受信・保存するデータ</h2>
+    <ul>
+      <li><strong>フォローリクエスト</strong>: リモートアカウントの Actor URI および Inbox URI を保存します。フォロー解除（Undo）またはアカウント削除（Delete）を受信した場合は削除します。</li>
+      <li><strong>いいね（Like）</strong>: 対象投稿へのいいね数カウントおよび管理用の Actor URI を保存します。取り消し（Undo）を受信した場合は削除します。</li>
+      <li><strong>返信・メンション・他者の投稿</strong>: 本サーバーでは受信・保存せず、そのまま破棄します。</li>
+    </ul>
+
+    <h2>3. 公開範囲</h2>
+    <p>公開ページ上には投稿本文・日時・いいねの<strong>合計数のみ</strong>を表示し、誰がいいねしたか・誰がフォローしているかの一覧は公開しません。</p>
+
+    <h2>4. Cookie・アクセス解析</h2>
+    <p>公開ページではアクセス解析スクリプト・広告・外部フォントやトラッキング用 Cookie を一切使用しません。</p>
+
+    <% if @profile[:privacy_policy] && !@profile[:privacy_policy].to_s.empty? %>
+      <h2>5. 補足事項</h2>
+      <div class="note-box"><%= Rubicairn::ActivityPub.format_content_html(@profile[:privacy_policy]) %></div>
+    <% end %>
+
+    <h2><%= @profile[:privacy_policy].to_s.empty? ? "5" : "6" %>. お問い合わせ</h2>
+    <p>削除依頼やお問い合わせは <% if @profile[:contact] && !@profile[:contact].to_s.empty? %><%= obfuscated_contact_html(@profile[:contact]) %><% else %>管理者<% end %> までご連絡ください。</p>
+  </main>
+</body>
+</html>

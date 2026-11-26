@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    container_name: rubicairn
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4567:4567"
+    volumes:
+      - ./config:/app/config
+      - ./data:/app/data
+    environment:
+      RACK_ENV: production
+      TZ: JST-9

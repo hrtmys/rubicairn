@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="csrf-token" content="<%= h(session[:csrf_token]) %>">
+  <title><%= h(@profile[:display_name]) %> - 管理</title>
+  <style>
+    :root { --bg: #fff; --surface: #fafafa; --ink: #111; --muted: #666; --border: #e5e5e5; --danger: #b91c1c; --ok: #166534; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0f0f10; --surface: #171719; --ink: #ececec; --muted: #9a9a9f; --border: #262629; --danger: #ef4444; --ok: #4ade80; }
+    }
+    * { box-sizing: border-box; }
+    body { max-width: 820px; margin: 0 auto; padding: 20px 18px 64px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", sans-serif; line-height: 1.6; color: var(--ink); background: var(--bg); }
+    a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--muted); word-break: break-all; }
+    header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 10px; padding-bottom: 14px; }
+    h1 { font-size: 1.25rem; margin: 0; font-weight: 600; }
+    .sub { font-size: 0.88rem; color: var(--muted); }
+    nav.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--border); margin-bottom: 20px; overflow-x: auto; }
+    nav.tabs a { padding: 10px 2px; text-decoration: none; color: var(--muted); font-size: 0.92rem; border-bottom: 2px solid transparent; white-space: nowrap; }
+    nav.tabs a.active { color: var(--ink); font-weight: 600; border-bottom-color: var(--ink); }
+    section { padding: 18px 0; border-bottom: 1px solid var(--border); }
+    section:last-of-type { border-bottom: none; }
+    h2 { font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 12px; }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+    textarea, input[type="text"], input[type="url"] { width: 100%; padding: 9px 10px; margin: 4px 0 10px; font-size: 0.95rem; font-family: inherit; background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 2px; }
+    button { padding: 8px 16px; font-size: 0.88rem; font-family: inherit; border: 1px solid var(--ink); border-radius: 2px; background: var(--ink); color: var(--bg); cursor: pointer; }
+    button.outline { background: transparent; color: var(--ink); border-color: var(--border); }
+    button.danger { background: transparent; color: var(--danger); border-color: var(--border); }
+    .flash { padding: 10px 12px; border-left: 2px solid var(--ok); background: var(--surface); margin-bottom: 16px; font-size: 0.9rem; }
+    .flash.error { border-left-color: var(--danger); color: var(--danger); }
+    .item { padding: 12px 0; border-top: 1px solid var(--border); }
+    .item-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 0.85rem; color: var(--muted); }
+    .small { font-size: 0.85rem; color: var(--muted); word-break: break-all; }
+    form.inline { display: inline; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    @media (max-width: 600px) { .grid-2 { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1><%= h(@profile[:display_name]) %></h1>
+      <div class="sub"><%= safe_at_html("@#{config.username}@#{config.domain}") %> · 投稿 <%= @stats[:notes] %> · フォロー <%= @stats[:followings] %> · フォロワー <%= @stats[:followers] %></div>
+    </div>
+    <div class="sub">
+      <a href="/users/<%= h(config.username) %>" target="_blank">公開ページ ↗</a>
+      <form class="inline" method="post" action="/admin/logout" style="margin-left: 10px;">
+        <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+        <button class="outline" type="submit" style="padding: 4px 10px; font-size: 0.8rem;">ロック</button>
+      </form>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <a href="/admin?tab=posts" class="<%= @tab == 'posts' ? 'active' : '' %>">投稿</a>
+    <a href="/admin?tab=rss" class="<%= @tab == 'rss' ? 'active' : '' %>">RSS</a>
+    <a href="/admin?tab=follows" class="<%= @tab == 'follows' ? 'active' : '' %>">フォロー管理<% if @pending_count > 0 %> (<%= @pending_count %>)<% end %></a>
+    <a href="/admin?tab=profile" class="<%= @tab == 'profile' ? 'active' : '' %>">プロフィール</a>
+  </nav>
+
+  <% if @show_advisory_banner %>
+    <% advs = @security_advisories["advisories"] %>
+    <% has_high = advs.any? { |a| %w[CRITICAL HIGH].include?(a["severity"].to_s.upcase) } %>
+    <div class="flash <%= has_high ? 'error' : '' %>">
+      <strong>セキュリティ更新通知 (<%= advs.size %>件)</strong> <span class="small">（次回リマインド: 7日後 / 更新後は自動消去）</span>
+      <% advs.each do |adv| %>
+        <div class="small" style="margin-top: 4px; color: inherit;">
+          [<%= h(adv["severity"]) %>] <code><%= h(adv["gem"]) %></code> (<%= h(adv["installed_version"]) %>)
+          — <%= h(adv["id"]) %><% if adv["fixed_version"] %> (修正版: <%= h(adv["fixed_version"]) %>)<% end %>
+          <% if safe_url?(adv["url"]) %>
+            <a href="<%= h(adv["url"]) %>" target="_blank" rel="noopener noreferrer">詳細 ↗</a>
+          <% end %>
+        </div>
+      <% end %>
+    </div>
+  <% end %>
+
+  <% if @msg && !@msg.empty? %>
+    <div class="flash">完了: <%= h(@msg) %></div>
+  <% end %>
+  <% if @flash_error && !@flash_error.empty? %>
+    <div class="flash error">エラー: <%= h(@flash_error) %></div>
+  <% end %>
+
+  <% if @tab == "posts" %>
+    <section>
+      <h2>新規投稿</h2>
+      <form method="post" action="/admin/notes">
+        <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+        <textarea name="content" rows="3" placeholder="いまどうしてる？" required></textarea>
+        <button type="submit">投稿する</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>過去の投稿 (<%= @notes.size %>)</h2>
+      <% if @notes.empty? %>
+        <p class="small">まだ投稿はありません。</p>
+      <% else %>
+        <% @notes.each do |note| %>
+          <div class="item">
+            <div class="item-head">
+              <span>#<%= note["id"] %> · <%= h(format_local_time(note["created_at"])) %><% if note["deleted_at"] %> · 削除済み<% end %></span>
+              <% unless note["deleted_at"] %>
+                <form class="inline" method="post" action="/admin/notes/<%= note["id"] %>/delete">
+                  <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+                  <button class="danger" type="submit">削除</button>
+                </form>
+              <% end %>
+            </div>
+            <div><%= Rubicairn::ActivityPub.format_content_html(note["content_raw"]) %></div>
+            <% likers = @received_likes_map[note["id"]] || [] %>
+            <% unless likers.empty? %>
+              <div class="small">&#9829; <%= likers.size %>: <%= likers.map { |l| h(l["actor_uri"]) }.join(", ") %></div>
+            <% end %>
+          </div>
+        <% end %>
+      <% end %>
+    </section>
+
+    <section>
+      <h2>いいね &amp; ブースト</h2>
+      <div class="grid-2">
+        <form method="post" action="/admin/likes">
+          <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+          <input type="url" name="url" placeholder="いいねする投稿URL (https://...)" required>
+          <button class="outline" type="submit">いいね</button>
+        </form>
+        <form method="post" action="/admin/boosts">
+          <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+          <input type="url" name="url" placeholder="ブーストする投稿URL (https://...)" required>
+          <button class="outline" type="submit">ブースト</button>
+        </form>
+      </div>
+
+      <% @likes.each do |like| %>
+        <div class="item item-head">
+          <span class="small">いいね: <%= h(like["target_object_uri"]) %></span>
+          <form class="inline" method="post" action="/admin/likes/<%= like["id"] %>/undo">
+            <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+            <button class="outline" type="submit">取消</button>
+          </form>
+        </div>
+      <% end %>
+
+      <% @boosts.each do |boost| %>
+        <div class="item item-head">
+          <span class="small">ブースト: <%= h(boost["target_object_uri"]) %></span>
+          <form class="inline" method="post" action="/admin/boosts/<%= boost["id"] %>/undo">
+            <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+            <button class="outline" type="submit">取消</button>
+          </form>
+        </div>
+      <% end %>
+    </section>
+
+    <% unless @failed_deliveries.empty? %>
+      <section>
+        <h2>配送失敗 (<%= @failed_deliveries.size %>)</h2>
+        <% @failed_deliveries.each do |d| %>
+          <div class="item">
+            <div class="small">宛先: <%= h(d["target_inbox"]) %> (試行: <%= d["attempts"] %>)</div>
+            <div class="small">エラー: <%= h(d["last_error"]) %></div>
+            <form class="inline" method="post" action="/admin/deliveries/<%= d["id"] %>/retry">
+              <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+              <button class="outline" type="submit">再送</button>
+            </form>
+            <form class="inline" method="post" action="/admin/deliveries/<%= d["id"] %>/delete">
+              <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+              <button class="danger" type="submit">削除</button>
+            </form>
+          </div>
+        <% end %>
+      </section>
+    <% end %>
+
+  <% elsif @tab == "rss" %>
+    <section>
+      <div class="item-head" style="margin-bottom: 12px;">
+        <h2 style="margin: 0;">フォロー中 RSS フィード</h2>
+        <a href="/admin?tab=rss&refresh_rss=1">強制更新</a>
+      </div>
+      <% if @rss_data && !@rss_data[:errors].empty? %>
+        <div class="flash error"><%= h(@rss_data[:errors].join(" / ")) %></div>
+      <% end %>
+      <% items = @rss_data ? @rss_data[:items] : [] %>
+      <% if items.empty? %>
+        <p class="small">表示できる RSS 記事はありません。</p>
+      <% else %>
+        <% items.each do |item| %>
+          <div class="item">
+            <div class="small"><strong><%= h(item[:author]) %></strong> · <%= h(format_local_time(item[:published_at])) %></div>
+            <div><%= h(item[:text]) %></div>
+            <% if safe_url?(item[:url]) %>
+              <div class="small"><a href="<%= h(item[:url]) %>" rel="nofollow noopener noreferrer" target="_blank"><%= h(item[:url]) %></a></div>
+            <% end %>
+          </div>
+        <% end %>
+      <% end %>
+    </section>
+
+    <% if @trends %>
+      <section>
+        <h2>トレンド</h2>
+        <% t_items = @trends.is_a?(Array) ? @trends : [@trends] %>
+        <% t_items.each do |t| %>
+          <div class="item small">
+            <% if t.is_a?(Hash) %>
+              <%= h(t["name"] || t["title"] || t.to_json) %>
+              <% if safe_url?(t["url"]) %>
+                - <a href="<%= h(t["url"]) %>" rel="nofollow noopener noreferrer" target="_blank"><%= h(t["url"]) %></a>
+              <% end %>
+            <% else %>
+              <%= h(t.to_s) %>
+            <% end %>
+          </div>
+        <% end %>
+      </section>
+    <% end %>
+
+  <% elsif @tab == "follows" %>
+    <section>
+      <h2>新規フォロー <span class="small">（要 Passkey 再認証）</span></h2>
+      <form method="post" action="/admin/follows" data-step-up="follow">
+        <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+        <input type="hidden" name="step_up_token" value="">
+        <input type="text" name="handle" placeholder="@user@example.com またはプロフィールURL (https://...)" required>
+        <input type="url" name="rss_url" placeholder="RSS URL (省略時は自動生成)">
+        <button type="submit">フォローする</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>承認待ちフォロワー (<%= @pending_followers.size %>) <span class="small">（承認は要 Passkey 再認証）</span></h2>
+      <% if @pending_followers.empty? %>
+        <p class="small">承認待ちはありません。</p>
+      <% else %>
+        <% @pending_followers.each do |f| %>
+          <div class="item item-head">
+            <span class="small"><%= h(f["actor_uri"]) %></span>
+            <div>
+              <form class="inline" method="post" action="/admin/followers/accept" data-step-up="accept_follower">
+                <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+                <input type="hidden" name="step_up_token" value="">
+                <input type="hidden" name="actor_uri" value="<%= h(f["actor_uri"]) %>">
+                <button type="submit">承認</button>
+              </form>
+              <form class="inline" method="post" action="/admin/followers/reject">
+                <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+                <input type="hidden" name="actor_uri" value="<%= h(f["actor_uri"]) %>">
+                <button class="danger" type="submit">拒否</button>
+              </form>
+            </div>
+          </div>
+        <% end %>
+      <% end %>
+    </section>
+
+    <section>
+      <h2>フォロー中 (<%= @followings.size %>)</h2>
+      <% if @followings.empty? %>
+        <p class="small">フォロー中のアカウントはありません。</p>
+      <% else %>
+        <% @followings.each do |f| %>
+          <div class="item item-head">
+            <div>
+              <div><strong><%= h(f["handle"]) %></strong></div>
+              <div class="small"><%= h(f["rss_url"]) %></div>
+            </div>
+            <form class="inline" method="post" action="/admin/follows/<%= f["id"] %>/undo">
+              <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+              <button class="outline" type="submit">解除</button>
+            </form>
+          </div>
+        <% end %>
+      <% end %>
+    </section>
+
+    <section>
+      <h2>承認済みフォロワー (<%= @accepted_followers.size %>)</h2>
+      <% if @accepted_followers.empty? %>
+        <p class="small">承認済みフォロワーはいません。</p>
+      <% else %>
+        <% @accepted_followers.each do |f| %>
+          <div class="item item-head">
+            <span class="small"><%= h(f["actor_uri"]) %></span>
+            <form class="inline" method="post" action="/admin/followers/reject">
+              <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+              <input type="hidden" name="actor_uri" value="<%= h(f["actor_uri"]) %>">
+              <button class="danger" type="submit">フォロワー解除</button>
+            </form>
+          </div>
+        <% end %>
+      <% end %>
+    </section>
+
+  <% elsif @tab == "profile" %>
+    <section>
+      <h2>プロフィール編集</h2>
+      <form method="post" action="/admin/profile">
+        <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+        <label>表示名</label>
+        <input type="text" name="display_name" value="<%= h(@profile[:display_name]) %>" maxlength="80" required>
+        <label>自己紹介</label>
+        <textarea name="summary" rows="3" maxlength="500"><%= h(@profile[:summary]) %></textarea>
+        <label>公開連絡先（メールアドレス等）</label>
+        <input type="text" name="contact" value="<%= h(@profile[:contact]) %>" maxlength="120">
+        <label>プライバシーポリシー補足（任意）</label>
+        <textarea name="privacy_policy" rows="3" maxlength="4000" placeholder="空欄の場合は標準ポリシーのみ表示されます"><%= h(@profile[:privacy_policy]) %></textarea>
+        <button type="submit">プロフィールを保存</button>
+      </form>
+    </section>
+
+    <section>
+      <h2>外部 SNS・サイトリンク（rel=&quot;me&quot; 認証対応）</h2>
+      <p class="small">相手側サイト（GitHub、個人サイト、Mastodon 等）にもこのプロフィール URL（<code>https://<%= h(config.domain) %>/users/<%= h(config.username) %></code>）を <code>rel="me"</code> 付きで貼ると認証済みリンクとして表示されます。</p>
+      <form method="post" action="/admin/profile/links">
+        <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+        <div class="grid-2">
+          <input type="text" name="label" placeholder="例: GitHub / Website / Bluesky" maxlength="60" required>
+          <input type="url" name="url" placeholder="https://..." maxlength="300" required>
+        </div>
+        <button class="outline" type="submit">リンクを追加</button>
+      </form>
+
+      <% (@profile[:links] || []).each do |link| %>
+        <div class="item item-head">
+          <div class="small"><strong><%= h(link["label"]) %></strong>: <a href="<%= h(link["url"]) %>" target="_blank" rel="noopener noreferrer"><%= h(link["url"]) %></a></div>
+          <form class="inline" method="post" action="/admin/profile/links/<%= link["id"] %>/delete">
+            <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+            <button class="danger" type="submit">削除</button>
+          </form>
+        </div>
+      <% end %>
+    </section>
+
+    <section>
+      <h2>セキュリティ・Passkey 管理</h2>
+      <p class="small">
+        鍵ボールト: <strong><%= @vault_sealed ? "AES-256-GCM 暗号化済み" : "未暗号化" %></strong>
+        <% if @vault_ttl %> · メモリ復号残り約 <%= (@vault_ttl / 60) %> 分<% end %>
+      </p>
+      <p class="small">
+        脆弱性チェック (OSV.dev):
+        <% if @security_advisories %>
+          <% if @security_advisories["stale_after_update"] %>
+            更新済み（次回チェック待ち）
+          <% else %>
+            最終確認 <%= h(format_local_time(@security_advisories["checked_at"])) %> · 対象 <%= @security_advisories["gems_checked"].to_i %> gem ·
+            検出 <%= (@security_advisories["advisories"] || []).size %> 件
+          <% end %>
+        <% else %>
+          未実行（月次タイマーまたは <code>bin/check-advisories</code> で確認）
+        <% end %>
+      </p>
+
+      <% (@passkeys || []).each do |pk| %>
+        <div class="item item-head">
+          <div class="small">
+            <strong><%= h(pk["nickname"]) %></strong> (#<%= pk["id"] %> · <%= h(pk["wrap_mode"]) %>)
+            <% if pk["last_used_at"] %> · 最終利用: <%= h(format_local_time(pk["last_used_at"])) %><% end %>
+          </div>
+          <% if @passkeys.size > 1 %>
+            <form class="inline" method="post" action="/admin/passkeys/<%= pk["id"] %>/delete" data-step-up="manage_passkey">
+              <input type="hidden" name="authenticity_token" value="<%= h(session[:csrf_token]) %>">
+              <input type="hidden" name="step_up_token" value="">
+              <button class="danger" type="submit">削除</button>
+            </form>
+          <% end %>
+        </div>
+      <% end %>
+
+      <div class="item">
+        <label for="add-pk-nickname">別端末の Passkey を追加登録（要 Passkey 再認証）</label>
+        <input type="text" id="add-pk-nickname" placeholder="例: iPhone / 予備YubiKey" maxlength="60">
+        <div id="add-pk-passphrase-wrap" style="display: none;">
+          <input type="password" id="add-pk-passphrase" placeholder="PRF非対応ブラウザ用パスフレーズ (12文字以上)">
+        </div>
+        <button type="button" class="outline" id="btn-add-passkey">Passkey を追加</button>
+        <div id="add-pk-error" class="small" style="color: var(--danger); margin-top: 6px;"></div>
+      </div>
+    </section>
+  <% end %>
+
+  <script nonce="<%= @csp_nonce %>">
+    (function () {
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      if (!csrfMeta) return;
+      const csrf = csrfMeta.content;
+
+      function b64urlToBuf(str) {
+        const pad = "=".repeat((4 - (str.length % 4)) % 4);
+        const b64 = (str + pad).replace(/-/g, "+").replace(/_/g, "/");
+        const bin = atob(b64);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        return bytes.buffer;
+      }
+
+      function bufToB64url(buf) {
+        const bytes = new Uint8Array(buf);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      }
+
+      async function performStepUp(action) {
+        const optRes = await fetch("/admin/webauthn/step_up/options", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify({ action })
+        });
+        const optData = await optRes.json();
+        if (!optRes.ok || optData.error) throw new Error(optData.error || "再認証の開始に失敗しました");
+
+        const opts = optData.options;
+        opts.challenge = b64urlToBuf(opts.challenge);
+        if (opts.allowCredentials) {
+          opts.allowCredentials = opts.allowCredentials.map(c => ({ ...c, id: b64urlToBuf(c.id) }));
+        }
+
+        const cred = await navigator.credentials.get({ publicKey: opts });
+        const verRes = await fetch("/admin/webauthn/step_up/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+          body: JSON.stringify({
+            credential: {
+              id: cred.id,
+              rawId: bufToB64url(cred.rawId),
+              type: cred.type,
+              response: {
+                authenticatorData: bufToB64url(cred.response.authenticatorData),
+                clientDataJSON: bufToB64url(cred.response.clientDataJSON),
+                signature: bufToB64url(cred.response.signature),
+                userHandle: cred.response.userHandle ? bufToB64url(cred.response.userHandle) : null
+              }
+            }
+          })
+        });
+        const verData = await verRes.json();
+        if (!verRes.ok || !verData.step_up_token) throw new Error(verData.error || "Passkey 再認証に失敗しました");
+        return verData.step_up_token;
+      }
+
+      document.querySelectorAll("form[data-step-up]").forEach(form => {
+        form.addEventListener("submit", async (e) => {
+          const tokenInput = form.querySelector('input[name="step_up_token"]');
+          if (!tokenInput || tokenInput.value) return;
+          e.preventDefault();
+          try {
+            tokenInput.value = await performStepUp(form.dataset.stepUp);
+            form.submit();
+          } catch (err) {
+            alert(err.message);
+          }
+        });
+      });
+
+      const addPkBtn = document.getElementById("btn-add-passkey");
+      if (addPkBtn) {
+        addPkBtn.addEventListener("click", async () => {
+          const errBox = document.getElementById("add-pk-error");
+          errBox.textContent = "";
+          try {
+            const stepUpToken = await performStepUp("manage_passkey");
+            const optRes = await fetch("/admin/webauthn/register/options", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+              body: "{}"
+            });
+            const init = await optRes.json();
+            if (!optRes.ok) throw new Error(init.error || "登録オプション取得失敗");
+
+            const opts = init.options;
+            opts.challenge = b64urlToBuf(opts.challenge);
+            opts.user.id = b64urlToBuf(opts.user.id);
+            if (opts.excludeCredentials) {
+              opts.excludeCredentials = opts.excludeCredentials.map(c => ({ ...c, id: b64urlToBuf(c.id) }));
+            }
+            const saltBuf = b64urlToBuf(init.prf_salt);
+            opts.extensions = { prf: { eval: { first: saltBuf } } };
+
+            const cred = await navigator.credentials.create({ publicKey: opts });
+            const ext = cred.getClientExtensionResults ? cred.getClientExtensionResults() : {};
+            let prfOut = (ext.prf && ext.prf.results && ext.prf.results.first) ? bufToB64url(ext.prf.results.first) : null;
+            if (!prfOut && ext.prf && ext.prf.enabled) {
+              const assertRes = await navigator.credentials.get({
+                publicKey: {
+                  challenge: opts.challenge,
+                  allowCredentials: [{ type: "public-key", id: cred.rawId }],
+                  userVerification: "required",
+                  extensions: { prf: { eval: { first: saltBuf } } }
+                }
+              });
+              const aExt = assertRes.getClientExtensionResults();
+              if (aExt.prf && aExt.prf.results && aExt.prf.results.first) {
+                prfOut = bufToB64url(aExt.prf.results.first);
+              }
+            }
+
+            let wrapMode = "prf";
+            let passphrase = "";
+            if (!prfOut) {
+              wrapMode = "passphrase";
+              document.getElementById("add-pk-passphrase-wrap").style.display = "block";
+              passphrase = document.getElementById("add-pk-passphrase").value;
+              if (passphrase.length < 12) {
+                errBox.textContent = "PRF非対応のため12文字以上のパスフレーズを入力してください。";
+                return;
+              }
+            }
+
+            const verRes = await fetch("/admin/webauthn/register/verify", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+              body: JSON.stringify({
+                step_up_token: stepUpToken,
+                nickname: document.getElementById("add-pk-nickname").value,
+                wrap_mode: wrapMode,
+                prf_output: prfOut,
+                vault_passphrase: passphrase,
+                credential: {
+                  id: cred.id,
+                  rawId: bufToB64url(cred.rawId),
+                  type: cred.type,
+                  response: {
+                    attestationObject: bufToB64url(cred.response.attestationObject),
+                    clientDataJSON: bufToB64url(cred.response.clientDataJSON)
+                  }
+                }
+              })
+            });
+            const done = await verRes.json();
+            if (!verRes.ok || done.error) throw new Error(done.error || "追加登録に失敗しました");
+            window.location.href = done.redirect || "/admin?tab=profile";
+          } catch (err) {
+            errBox.textContent = err.message;
+          }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

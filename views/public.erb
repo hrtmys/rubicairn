@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= h(@profile[:display_name]) %> (@<%= h(config.username) %>@<%= h(config.domain) %>)</title>
+  <style>
+    :root { --bg: #fff; --surface: #fafafa; --ink: #111; --muted: #666; --border: #e5e5e5; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #0f0f10; --surface: #171719; --ink: #ececec; --muted: #9a9a9f; --border: #262629; }
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Hiragino Sans", sans-serif; line-height: 1.65; }
+    a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--muted); word-break: break-all; }
+    a:hover { text-decoration-color: var(--ink); }
+    .topbar { border-bottom: 1px solid var(--border); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; max-width: 960px; margin: 0 auto; font-size: 0.9rem; }
+    .topbar-brand { font-weight: 600; text-decoration: none; }
+    .topbar-nav { display: flex; gap: 16px; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 28px 20px 64px; display: grid; grid-template-columns: 1fr 270px; gap: 40px; align-items: start; }
+    @media (max-width: 760px) { .wrap { grid-template-columns: 1fr; gap: 28px; } }
+    .profile-head { padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .profile-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 1.55rem; letter-spacing: -0.01em; }
+    .handle { color: var(--muted); font-size: 0.95rem; margin-top: 2px; }
+    .bio { margin: 14px 0; }
+    .bio p { margin: 0; }
+    .stats { display: flex; gap: 20px; font-size: 0.9rem; color: var(--muted); font-variant-numeric: tabular-nums; margin-top: 12px; }
+    .stats strong { color: var(--ink); font-weight: 600; }
+    .links-table { margin-top: 16px; border-top: 1px solid var(--border); }
+    .link-row { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+    .link-label { color: var(--muted); }
+    details.follow-box { position: relative; }
+    summary.btn-primary { list-style: none; cursor: pointer; display: inline-block; padding: 8px 18px; background: var(--ink); color: var(--bg); font-size: 0.9rem; font-weight: 500; border-radius: 2px; user-select: none; }
+    summary.btn-primary::-webkit-details-marker { display: none; }
+    .follow-panel { margin-top: 10px; padding: 14px; background: var(--surface); border: 1px solid var(--border); font-size: 0.88rem; max-width: 360px; }
+    .follow-panel input { width: 100%; padding: 7px 9px; margin: 8px 0; font-family: monospace; font-size: 0.88rem; background: var(--bg); color: var(--ink); border: 1px solid var(--border); border-radius: 2px; }
+    .badge { display: inline-block; padding: 1px 6px; border: 1px solid var(--border); font-size: 0.78rem; color: var(--muted); border-radius: 2px; }
+    .note { padding: 20px 0; border-bottom: 1px solid var(--border); }
+    .note-body p { margin: 0 0 8px; }
+    .note-meta { font-size: 0.85rem; color: var(--muted); display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; font-variant-numeric: tabular-nums; }
+    details.like-box { text-align: right; }
+    summary.like-summary { list-style: none; cursor: pointer; display: inline-block; padding: 2px 8px; border: 1px solid var(--border); border-radius: 2px; color: var(--muted); user-select: none; }
+    summary.like-summary::-webkit-details-marker { display: none; }
+    summary.like-summary:hover { color: var(--ink); border-color: var(--ink); }
+    .like-panel { margin-top: 8px; padding: 12px; background: var(--surface); border: 1px solid var(--border); text-align: left; font-size: 0.84rem; max-width: 380px; color: var(--ink); }
+    .like-panel input { width: 100%; padding: 6px 8px; margin: 6px 0 8px; font-family: monospace; font-size: 0.82rem; background: var(--bg); color: var(--ink); border: 1px solid var(--border); border-radius: 2px; }
+    .empty { color: var(--muted); padding: 28px 0; }
+    .sidebar { border-left: 1px solid var(--border); padding-left: 24px; font-size: 0.88rem; }
+    @media (max-width: 760px) { .sidebar { border-left: none; border-top: 1px solid var(--border); padding-left: 0; padding-top: 20px; } }
+    .sidebar h2 { margin: 0 0 10px; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+    .sidebar-item { margin-bottom: 12px; color: var(--muted); }
+    .sidebar-item strong { display: block; color: var(--ink); font-weight: 500; }
+    details.contact-reveal summary { cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--muted); color: var(--ink); list-style: none; }
+    details.contact-reveal summary::-webkit-details-marker { display: none; }
+    .m-addr { display: inline-block; margin-top: 6px; padding: 4px 8px; background: var(--surface); border: 1px solid var(--border); font-family: monospace; font-size: 0.85rem; color: var(--ink); user-select: all; }
+    .m-addr::before { content: attr(data-a) attr(data-b) "\0040" attr(data-c) attr(data-d); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="topbar-brand" href="/users/<%= h(config.username) %>"><%= h(config.domain) %></a>
+    <nav class="topbar-nav">
+      <a href="/users/<%= h(config.username) %>">タイムライン</a>
+      <a href="/privacy">プライバシーポリシー</a>
+    </nav>
+  </header>
+
+  <div class="wrap">
+    <main>
+      <section class="profile-head">
+        <div class="profile-row">
+          <div>
+            <h1><%= h(@profile[:display_name]) %></h1>
+            <div class="handle"><%= safe_at_html("@#{config.username}@#{config.domain}") %></div>
+          </div>
+          <details class="follow-box">
+            <summary class="btn-primary">フォロー</summary>
+            <div class="follow-panel">
+              <div><strong>リモートフォロー</strong> <span class="badge">承認制</span></div>
+              <div>お使いの <strong>Mastodon / Misskey / Pleroma / Threads</strong> 等の検索欄に以下を貼り付けてフォローしてください。</div>
+              <!--email_off--><input type="text" readonly value="@<%= h(config.username) %>@<%= h(config.domain) %>"><!--/email_off-->
+              <div style="color: var(--muted);">※ 単一ユーザーサーバーのため、返信・メンションは受信しません。</div>
+              <div style="color: var(--muted); margin-top: 4px;">※ Bluesky（AT Protocol）はプロトコルが異なるため、Bridgy Fed 等のブリッジ経由以外では直接フォローできません。</div>
+            </div>
+          </details>
+        </div>
+
+        <div class="bio"><%= Rubicairn::ActivityPub.format_content_html(@profile[:summary]) %></div>
+
+        <div class="stats">
+          <span><strong><%= @stats[:notes] %></strong> 投稿</span>
+          <span><strong><%= @stats[:followings] %></strong> フォロー</span>
+          <span><strong><%= @stats[:followers] %></strong> フォロワー</span>
+        </div>
+
+        <% valid_links = (@profile[:links] || []).select { |l| safe_url?(l["url"]) } %>
+        <% unless valid_links.empty? %>
+          <div class="links-table">
+            <% valid_links.each do |link| %>
+              <div class="link-row">
+                <div class="link-label"><%= h(link["label"]) %></div>
+                <div><a href="<%= h(link["url"]) %>" rel="me nofollow noopener noreferrer" target="_blank"><%= h(link["url"]) %></a></div>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+      </section>
+
+      <section>
+        <% if @notes.empty? %>
+          <p class="empty">まだ投稿はありません。</p>
+        <% else %>
+          <% @notes.each do |note| %>
+            <article class="note">
+              <div class="note-body"><%= Rubicairn::ActivityPub.format_content_html(note["content_raw"]) %></div>
+              <div class="note-meta">
+                <a href="/users/<%= h(config.username) %>/notes/<%= note["id"] %>"><time datetime="<%= h(note["created_at"]) %>"><%= h(format_local_time(note["created_at"])) %></time></a>
+                <details class="like-box">
+                  <summary class="like-summary" title="いいね・ブーストの方法を見る">&#9829; <%= note["like_count"].to_i %></summary>
+                  <div class="like-panel">
+                    <div><strong>リモートからいいね・ブースト</strong></div>
+                    <div>以下の投稿 URL をコピーして、お使いの SNS の検索欄に貼り付けてください。</div>
+                    <input type="text" readonly value="<%= h(config.note_uri(note["id"])) %>">
+                    <div style="color: var(--muted);">• <strong>Mastodon / Misskey / Pleroma / Threads 等</strong>: 検索結果からそのままいいね・ブーストできます。</div>
+                    <div style="color: var(--muted); margin-top: 4px;">• <strong>Bluesky</strong>: AT Protocol のため直接いいねできません（Bridgy Fed 等のブリッジ連携時を除く）。</div>
+                  </div>
+                </details>
+              </div>
+            </article>
+          <% end %>
+        <% end %>
+      </section>
+    </main>
+
+    <aside class="sidebar">
+      <h2>サーバー情報</h2>
+      <div class="sidebar-item">
+        <strong>ドメイン</strong>
+        <%= h(config.domain) %>
+      </div>
+      <div class="sidebar-item">
+        <strong>運用方針</strong>
+        単一ユーザー向け Rubicairn インスタンス。フォローは手動承認制で、返信・メンションは受信しません。
+      </div>
+      <% if @profile[:contact] && !@profile[:contact].to_s.empty? %>
+        <div class="sidebar-item">
+          <strong>連絡先</strong>
+          <%= obfuscated_contact_html(@profile[:contact]) %>
+        </div>
+      <% end %>
+      <% if safe_url?(config.repository_url) %>
+        <div class="sidebar-item">
+          <strong>ソフトウェア</strong>
+          <a href="<%= h(config.repository_url) %>" rel="nofollow noopener noreferrer" target="_blank">Rubicairn</a>
+        </div>
+      <% end %>
+      <div class="sidebar-item">
+        <a href="/privacy">プライバシーポリシー</a>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>
